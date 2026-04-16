@@ -1,8 +1,6 @@
 #include "NimBLEDevice.h"
 
 String targetDeviceAddress = "c0:00:00:00:05:42";
-BLEUUID serviceUUID("0000FFE0-0000-1000-8000-00805F9B34FB");
-BLEUUID charUUID("0000FFE1-0000-1000-8000-00805F9B34FB");
 bool bleConnected = false;
 BLEClient* pClient = nullptr;
 BLERemoteCharacteristic* pRemoteChar = nullptr;
@@ -136,6 +134,7 @@ void connectToDevice(const String& deviceAddress) {
 
             if(id=="0xffe1"){
               pRemoteChar = c;
+              isTest=true;
               Serial.println("НАЙДЕНА НУЖНАЯ");
             }
 
@@ -274,5 +273,5 @@ void loop() {
     }
   }
 
-  delay(50);
+  delay(300);
 }
