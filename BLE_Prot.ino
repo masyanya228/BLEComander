@@ -275,8 +275,8 @@ void connectToSky(const String& deviceAddress) {
       }
     }
   } else {
-    connectToSky(deviceAddress);
     Serial.println("Не удалось подключиться");
+    connectToSky(deviceAddress);
   }
 }
 
