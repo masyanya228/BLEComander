@@ -1,21 +1,24 @@
 #include "NimBLEDevice.h"
 
 String targetDeviceAddress = "c0:00:00:00:05:42";
+String targetDeviceAddressSky = "a4:c1:38:20:30:0e";
 bool bleConnected = false;
 NimBLEClient* pClient = nullptr;
+NimBLEClient* pClientSky = nullptr;
 NimBLERemoteCharacteristic* pRemoteChar = nullptr;
+NimBLERemoteCharacteristic* pRemoteCharSky = nullptr;
 bool isTest=false;
 int numTest=0;
 uint32_t lastConnectAttempt = 0;
 const uint32_t reconnectInterval = 8000;
 
-void sendCommand(const uint8_t* data, size_t len, String desc) {
-  if (!bleConnected || pRemoteChar == nullptr) {
+void sendCommand(NimBLERemoteCharacteristic* bleChar, const uint8_t* data, size_t len, String desc) {
+  if (!bleConnected || bleChar == nullptr) {
     Serial.println("❌ BLE не подключено!");
     return;
   }
 
-  bool ok = pRemoteChar->writeValue(const_cast<uint8_t*>(data), len, false);
+  bool ok = bleChar->writeValue(const_cast<uint8_t*>(data), len, false);
   return;
   Serial.print(ok ? "✅ " : "❌ ");
   Serial.print(desc + " | ");
@@ -28,32 +31,47 @@ void sendCommand(const uint8_t* data, size_t len, String desc) {
 
 void power(bool on) {
   uint8_t cmd[9] = {0x7B, 0x00, 0x04, on ? 0x01 : 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xBF};
-  sendCommand(cmd, sizeof(cmd), on ? "ВКЛЮЧЕНИЕ" : "ВЫКЛЮЧЕНИЕ");
+  sendCommand(pRemoteChar, cmd, sizeof(cmd), on ? "ВКЛЮЧЕНИЕ" : "ВЫКЛЮЧЕНИЕ");
 }
 
 void setColor(uint8_t r, uint8_t g, uint8_t b) {
   uint8_t cmd[] = {0x7B, 0x00, 0x07, r, g, b, 0xFF, 0xFF, 0xBF};//0x00, 0xFF, 0xBF - тоже самое
-  sendCommand(cmd, sizeof(cmd), "Лента цвет");
+  sendCommand(pRemoteChar, cmd, sizeof(cmd), "Лента цвет");
 }
 
 void setBright(uint8_t percent) {
-  uint8_t cmd[] = {0x7B, 0x00, 0x01, percent, 0x00, 0xFF, 0xFF, 0xFF, 0xBF};
-  sendCommand(cmd, sizeof(cmd), "Лента яркость");
+  uint8_t cmd[] = {0x7B, 0xFF, 0x01, percent*32/100, percent, 0x00, 0xFF, 0xFF, 0xBF};
+  sendCommand(pRemoteChar, cmd, sizeof(cmd), "Лента яркость");
 }
 
 void powerRGB(bool on) {
   uint8_t cmd[9] = {0x7E, 0xFF, 0x04, on ? 0x01 : 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xEF};
-  sendCommand(cmd, sizeof(cmd), on ? "ВКЛЮЧЕНИЕ" : "ВЫКЛЮЧЕНИЕ");
+  sendCommand(pRemoteChar, cmd, sizeof(cmd), on ? "ВКЛЮЧЕНИЕ" : "ВЫКЛЮЧЕНИЕ");
 }
 
 void setColorRGB(uint8_t r, uint8_t g, uint8_t b) {
-  uint8_t cmd[] = {0x7B, 0x00, 0x0C, r, g, b, 0xFF, 0xFF, 0xBF};
-  sendCommand(cmd, sizeof(cmd), "Подстаканники цвет");
+  uint8_t cmd[] = {0x7E, 0xFF, 0x05, 0x03, r, g, b, 0xFF, 0xEF};
+  sendCommand(pRemoteChar, cmd, sizeof(cmd), "Подстаканники цвет");
 }
 
 void setBrightRGB(uint8_t percent) {
   uint8_t cmd[] = {0x7E, 0xFF, 0x01, percent, 0x00, 0xFF, 0xFF, 0xFF, 0xEF};
-  sendCommand(cmd, sizeof(cmd), "Подстаканники яркость");
+  sendCommand(pRemoteChar, cmd, sizeof(cmd), "Подстаканники яркость");
+}
+
+void powerSKY(bool on) {
+  uint8_t cmd[9] = {0x7E, 0xFF, 0x04, on ? 0x01 : 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xEF};
+  sendCommand(pRemoteCharSky, cmd, sizeof(cmd), on ? "ВКЛЮЧЕНИЕ" : "ВЫКЛЮЧЕНИЕ");
+}
+
+void setColorSKY(uint8_t r, uint8_t g, uint8_t b) {
+  uint8_t cmd[] = {0x7E, 0xFF, 0x05, 0x03, r, g, b, 0xFF, 0xEF};
+  sendCommand(pRemoteCharSky, cmd, sizeof(cmd), "Подстаканники цвет");
+}
+
+void setBrightSKY(uint8_t percent) {
+  uint8_t cmd[] = {0x7E, 0x00, 0x01, percent, 0x00, 0xFF, 0xFF, 0xFF, 0xEF};
+  sendCommand(pRemoteCharSky, cmd, sizeof(cmd), "Подстаканники яркость");
 }
 
 void testCommands(const String& input) {
@@ -92,7 +110,7 @@ void testCommands(const String& input) {
     }
     Serial.println();
 
-    sendCommand(buf, len, "TEST");
+    sendCommand(pRemoteChar, buf, len, "TEST");
     delay(2000); // пауза между командами чтобы увидеть эффект
   }
 
@@ -107,34 +125,8 @@ void scanResultCallback(NimBLEAdvertisedDevice* device) {
     Serial.print("  Имя: ");
     Serial.println(device->getName().c_str());
   }
-
-  NimBLEUUID targetService("0000FFE0-0000-1000-8000-00805F9B34FB");
-  if (device->isAdvertisingService(targetService)) {
-    Serial.println("  → Содержит целевой сервис!");
-    targetDeviceAddress = String(device->getAddress().toString().c_str());
-  }
 }
 
-void setup() {
-  Serial.begin(115200);
-  NimBLEDevice::init("");
-  esp_log_level_set("*", ESP_LOG_VERBOSE); // Максимальный уровень логирования
-
-  NimBLEScan* pScan = NimBLEDevice::getScan();
-  pScan->setActiveScan(true);
-  pScan->setInterval(45);
-  pScan->setWindow(15);
-
-  pScan->start(60, scanResultCallback);
-
-  Serial.println("Сканирование завершено.");
-
-  if (targetDeviceAddress != "") {
-    connectToDevice(targetDeviceAddress);
-  } else {
-    Serial.println("Целевое устройство не найдено.");
-  }
-}
 
 void connectToDevice(const String& deviceAddress) {
   if (pClient && pClient->isConnected()) {
@@ -157,9 +149,6 @@ void connectToDevice(const String& deviceAddress) {
     bleConnected=true;
     // Добавляем задержку для стабилизации соединения
     delay(1000);
-    // Важно: явно запрашиваем обнаружение сервисов
-    //Serial.println("Запрашиваем список сервисов...");
-    //bool success = pClient->discoverServices();
 
     // Получаем список сервисов
     std::vector<NimBLERemoteService*> services = pClient->getServices(true);
@@ -195,7 +184,7 @@ void connectToDevice(const String& deviceAddress) {
             if(id=="0xffe1"){
               pRemoteChar = c;
               //isTest=true;
-              Serial.println("НАЙДЕНА НУЖНАЯ");
+              Serial.println("Ambient ready");
             }
 
             // Читаем значение, если можно
@@ -210,9 +199,103 @@ void connectToDevice(const String& deviceAddress) {
     }
   } else {
     Serial.println("Не удалось подключиться");
+    connectToDevice(deviceAddress);
   }
 
   //NimBLEDevice::deleteClient(pClient);
+}
+
+void connectToSky(const String& deviceAddress) {
+  if (pClientSky && pClientSky->isConnected()) {
+    Serial.println("Уже подключены");
+    return;
+  }
+
+  Serial.print("Подключение к устройству: ");
+  Serial.println(deviceAddress);
+
+  if (pClientSky) {
+    NimBLEDevice::deleteClient(pClientSky);
+  }
+
+  pClientSky = NimBLEDevice::createClient();
+
+  NimBLEAddress address(deviceAddress.c_str(), BLE_ADDR_PUBLIC);
+  if (pClientSky->connect(address)) {
+    Serial.println("Успешное подключение!");
+    bleConnected=true;
+    // Добавляем задержку для стабилизации соединения
+    delay(1000);
+
+    // Получаем список сервисов
+    std::vector<NimBLERemoteService*> services = pClientSky->getServices(true);
+    if (services.empty()) {
+      Serial.println("  Сервисы не найдены. Возможно, устройство не транслирует их.");
+    } else {
+      Serial.print("  Найдено сервисов: ");
+      Serial.println(services.size());
+
+      for (auto& s : services) {
+        Serial.print("    Сервис: ");
+        Serial.println(s->getUUID().toString().c_str());
+
+        // Получаем характеристики для каждого сервиса
+        std::vector<NimBLERemoteCharacteristic*> characteristics = s->getCharacteristics(true);
+        if (characteristics.empty()) {
+          Serial.println("      Характеристик нет.");
+        } else {
+          Serial.print("      Найдено характеристик: ");
+          Serial.println(characteristics.size());
+
+          for (auto& c : characteristics) {
+            String id = c->getUUID().toString().c_str();
+            
+            Serial.print("        Характеристика: ");
+            Serial.println(id);
+            Serial.print("          Свойства: ");
+            if (c->canRead()) Serial.print("READ ");
+            if (c->canNotify()) Serial.print("NOTIFY ");
+            if (c->canWrite()) Serial.print("WRITE ");
+            Serial.println();
+
+            if(id=="0xffe1"){
+              pRemoteCharSky = c;
+              //isTest=true;
+              Serial.println("StarSky ready");
+            }
+
+            // Читаем значение, если можно
+            if (c->canRead()) {
+              std::string value = c->readValue();
+              Serial.print("          Значение: ");
+              Serial.println(value.empty() ? "пусто" : value.c_str());
+            }
+          }
+        }
+      }
+    }
+  } else {
+    connectToSky(deviceAddress);
+    Serial.println("Не удалось подключиться");
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  NimBLEDevice::init("");
+  esp_log_level_set("*", ESP_LOG_VERBOSE); // Максимальный уровень логирования
+
+  // NimBLEScan* pScan = NimBLEDevice::getScan();
+  // pScan->setActiveScan(true);
+  // pScan->setInterval(45);
+  // pScan->setWindow(15);
+
+  // pScan->start(60, scanResultCallback);
+
+  // Serial.println("Сканирование завершено.");
+
+  connectToDevice(targetDeviceAddress);
+  connectToSky(targetDeviceAddressSky);
 }
 
 void loop() {
@@ -255,31 +338,38 @@ void loop() {
     if (command == "on"){
       power(true);
       powerRGB(true);
+      powerSKY(true);
     }
     else if (command == "off"){
       power(false);
       powerRGB(false);
+      powerSKY(false);
     }
     else if (command == "red"){
       setColor(255, 0, 0);
       setColorRGB(255, 0, 0);
+      setColorSKY(255, 0, 0);
     }
     else if (command == "green"){
       setColor(0, 255, 0);
       setColorRGB(0, 255, 0);
+      setColorSKY(0, 255, 0);
     }
     else if (command == "blue"){
       setColor(0, 0, 255);
       setColorRGB(0, 0, 255);
+      setColorSKY(0, 0, 255);
     }
     else if (command == "white"){
       setColor(255, 255, 255);
       setColorRGB(255, 255, 255);
+      setColorSKY(255, 255, 255);
     }
     else if (command.startsWith("br ")) {
       int br = command.substring(3).toInt();
       setBright(br);
       setBrightRGB(br);
+      setBrightSKY(br);
     }
     else if (command.startsWith("blink")){
       int ms=100;
@@ -297,6 +387,13 @@ void loop() {
       setColor(255, 0, 0);
       delay(ms);
       setColor(255, 255, 255);
+    }
+    else if (command.startsWith("color ")) {
+      int r = 0, g = 0, b = 0;
+      sscanf(command.c_str() + 6, "%d %d %d", &r, &g, &b);
+      setColor(constrain(r, 0, 255), constrain(g, 0, 255), constrain(b, 0, 255));
+      setColorRGB(constrain(r, 0, 255), constrain(g, 0, 255), constrain(b, 0, 255));
+      setColorSKY(constrain(r, 0, 255), constrain(g, 0, 255), constrain(b, 0, 255));
     }
     else if (command == "scan") {
       Serial.println("Перезапуск сканирования:");
@@ -318,102 +415,13 @@ void loop() {
         sscanf(ptr, "%02X", &buf[len++]);
         ptr += 2;
       }
-      sendCommand(buf, len, "RAW");
+      sendCommand(pRemoteChar, buf, len, "RAW");
     }
     else if(command=="test"){
       isTest=!isTest;
     }
     else if (command == "tc"){
-      String cmds =
-        "7E,00,07,FF,00,00,00,FF,BF\n"
-"7E,00,07,00,FF,00,00,FF,BF\n"
-"7E,00,07,00,00,FF,00,FF,BF\n"
-"7E,00,07,FF,FF,00,00,FF,BF\n"
-"7E,00,07,00,FF,FF,00,FF,BF\n"
-"7E,00,07,FF,00,00,FF,FF,BF\n"
-"7E,00,07,00,FF,00,FF,FF,BF\n"
-"7E,00,07,00,00,FF,FF,FF,BF\n"
-"7E,00,07,FF,FF,FF,00,FF,BF\n"
-"7E,00,0C,FF,00,00,FF,FF,BF\n"
-"7E,00,0C,00,FF,00,FF,FF,BF\n"
-"7E,00,0C,00,00,FF,FF,FF,BF\n"
-"7E,00,0C,FF,FF,00,FF,FF,BF\n"
-"7E,00,0C,00,FF,FF,FF,FF,BF\n"
-"7E,00,08,FF,00,00,FF,FF,BF\n"
-"7E,00,08,00,FF,00,FF,FF,BF\n"
-"7E,00,08,00,00,FF,FF,FF,BF\n"
-"7E,00,09,FF,00,00,FF,FF,BF\n"
-"7E,00,09,00,FF,00,FF,FF,BF\n"
-"7E,00,09,00,00,FF,FF,FF,BF\n"
-"7E,00,0A,FF,00,00,FF,FF,BF\n"
-"7E,00,0A,00,FF,00,FF,FF,BF\n"
-"7E,00,0A,00,00,FF,FF,FF,BF\n"
-"7E,00,07,FF,00,00,FF,00,BF\n"
-"7E,00,07,00,FF,00,FF,00,BF\n"
-"7E,00,07,00,00,FF,FF,00,BF\n"
-"7E,00,0C,FF,00,00,00,FF,BF\n"
-"7E,00,0C,00,FF,00,00,FF,BF\n"
-"7E,00,0C,00,00,FF,00,FF,BF\n"
-"7E,00,0C,FF,FF,00,00,FF,BF\n"
-"7E,00,0C,00,FF,FF,00,FF,BF\n"
-"7E,00,07,FF,00,00,00,00,BF\n"
-"7E,00,0C,FF,00,00,00,00,BF\n"
-"7E,00,07,00,FF,00,00,00,BF\n"
-"7E,00,0C,00,FF,00,00,00,BF\n"
-"7E,00,07,00,00,FF,00,00,BF\n"
-"7E,00,0C,00,00,FF,00,00,BF\n"
-"7E,00,07,FF,FF,00,00,00,BF\n"
-"7E,00,0C,FF,FF,00,00,00,BF\n"
-"7E,00,07,00,FF,FF,00,00,BF\n"
-"7E,00,0C,00,FF,FF,00,00,BF\n"
-"7E,00,07,FF,00,FF,00,FF,BF\n"
-"7E,00,0C,FF,00,FF,00,FF,BF\n"
-"7E,00,07,FF,00,00,FF,00,FF\n"
-"7E,00,0C,FF,00,00,FF,00,FF\n"
-"7E,00,07,00,FF,00,FF,00,FF\n"
-"7E,00,0C,00,FF,00,FF,00,FF\n"
-"7E,00,07,00,00,FF,FF,00,FF\n"
-"7E,00,0C,00,00,FF,FF,00,FF\n"
-"7E,00,07,FF,FF,FF,00,FF,00\n"
-"7E,00,0C,FF,FF,FF,00,FF,00\n"
-"7E,00,07,FF,00,00,00,FF,00\n"
-"7E,00,0C,FF,00,00,00,FF,00\n"
-"7E,00,07,00,FF,00,00,FF,00\n"
-"7E,00,0C,00,FF,00,00,FF,00\n"
-"7E,00,07,00,00,FF,00,FF,00\n"
-"7E,00,0C,00,00,FF,00,FF,00\n"
-"7E,00,07,FF,FF,00,FF,00,00\n"
-"7E,00,0C,FF,FF,00,FF,00,00\n"
-"7E,00,07,FF,00,FF,FF,00,00\n"
-"7E,00,0C,FF,00,FF,FF,00,00\n"
-"7E,00,07,00,FF,FF,FF,00,00\n"
-"7E,00,0C,00,FF,FF,FF,00,00\n"
-"7E,00,07,FF,00,00,FF,FF,00\n"
-"7E,00,0C,FF,00,00,FF,FF,00\n"
-"7E,00,07,00,FF,00,FF,FF,00\n"
-"7E,00,0C,00,FF,00,FF,FF,00\n"
-"7E,00,07,00,00,FF,FF,FF,00\n"
-"7E,00,0C,00,00,FF,FF,FF,00\n"
-"7E,00,07,FF,FF,FF,FF,00,00\n"
-"7E,00,0C,FF,FF,FF,FF,00,00\n"
-"7E,00,07,FF,00,00,00,00,FF\n"
-"7E,00,0C,FF,00,00,00,00,FF\n"
-"7E,00,07,00,FF,00,00,00,FF\n"
-"7E,00,0C,00,FF,00,00,00,FF\n"
-"7E,00,07,00,00,FF,00,00,FF\n"
-"7E,00,0C,00,00,FF,00,00,FF\n"
-"7E,00,07,FF,FF,00,00,00,FF\n"
-"7E,00,0C,FF,FF,00,00,00,FF\n"
-"7E,00,07,00,FF,FF,00,00,FF\n"
-"7E,00,0C,00,FF,FF,00,00,FF\n"
-"7E,00,07,00,00,FF,FF,00,FF\n"
-"7E,00,0C,00,00,FF,FF,00,FF\n"
-"7E,00,07,FF,00,00,FF,00,FF\n"
-"7E,00,0C,FF,00,00,FF,00,FF\n"
-"7E,00,07,00,FF,00,FF,00,FF\n"
-"7E,00,0C,00,FF,00,FF,00,FF\n"
-"7E,00,07,00,00,FF,FF,00,FF\n"
-"7E,00,0C,00,00,FF,FF,00,FF";
+      String cmds ="";
       testCommands(cmds);
     }
     else {
