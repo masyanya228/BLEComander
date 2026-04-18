@@ -1,3 +1,4 @@
+#include <Wire.h>
 #include "NimBLEDevice.h"
 
 String targetDeviceAddress = "c0:00:00:00:05:42";
@@ -12,300 +13,303 @@ int numTest=0;
 uint32_t lastConnectAttempt = 0;
 const uint32_t reconnectInterval = 8000;
 
-void sendCommand(NimBLERemoteCharacteristic* bleChar, const uint8_t* data, size_t len, String desc) {
-  if (!bleConnected || bleChar == nullptr) {
-    Serial.println("❌ BLE не подключено!");
-    return;
+#define SLAVE_ADDR 20
+#define REG_Power 0x10 //Вкл/Выкл подсветку [target][state]
+#define REG_SetRGB 0x11 //Установить произвольный RGB цвет [target][R][G][B]
+#define REG_SetBR 0x12 //Установить яркость [target][Br]
+#define REG_GetLightStatus 0x15 //Вернуть статус подсветки
+#define REG_GetErrorCount 0x06
+#define REG_GetNextError  0x07
+uint8_t currentR = 255;
+uint8_t currentG = 255;
+uint8_t currentB = 255;
+uint8_t currentBR = 100;
+bool    powerState = true;
+uint8_t lastCmd = 0;
+uint32_t lastMessageTime = 0;
+
+class BLEDeviceControl {
+public:
+  String mac;
+  NimBLEClient* client = nullptr;
+  NimBLERemoteCharacteristic* characteristic = nullptr;
+  bool connected = false;
+
+  BLEDeviceControl(String macAddress) : mac(macAddress) {}
+
+  bool connect() {
+    if (connected && client && client->isConnected()) return true;
+
+    if (client) {
+      NimBLEDevice::deleteClient(client);
+    }
+
+    client = NimBLEDevice::createClient();
+    client->setConnectTimeout(10);
+
+    NimBLEAddress address(mac.c_str(), BLE_ADDR_PUBLIC);
+
+    Serial.print("Подключение к " + mac + " ... ");
+
+    if (client->connect(address)) {
+      Serial.println("OK");
+      delay(1000);
+      std::vector<NimBLERemoteService*> services = pClientSky->getServices(true);
+      if (services.empty()) {
+        Serial.println("Сервисы не найдены.");
+      } else {
+        Serial.print("  Найдено сервисов: ");
+        Serial.println(services.size());
+
+        for (auto& s : services) {
+          std::vector<NimBLERemoteCharacteristic*> characteristics = s->getCharacteristics(true);
+          if (characteristics.empty()) {
+            Serial.println("      Характеристик нет.");
+          } else {
+            Serial.print("      Найдено характеристик: ");
+            Serial.println(characteristics.size());
+
+            for (auto& c : characteristics) {
+              String id = c->getUUID().toString().c_str();
+              
+              Serial.print("        Характеристика: ");
+              Serial.println(id);
+              Serial.print("          Свойства: ");
+              if (c->canRead()) Serial.print("READ ");
+              if (c->canNotify()) Serial.print("NOTIFY ");
+              if (c->canWrite()) Serial.print("WRITE ");
+              Serial.println();
+
+              if(id=="0xffe1"){
+                characteristic = c;
+              }
+              if (c->canRead()) {
+                std::string value = c->readValue();
+                Serial.print("          Значение: ");
+                Serial.println(value.empty() ? "пусто" : value.c_str());
+              }
+            }
+          }
+        }
+        if(characteristic)
+        {
+          Serial.println("StarSky ready");
+          return true;
+        }
+        else Serial.println("  → Сервис/характеристика не найдены"); 
+      }
+    } else {
+      Serial.println("НЕ УДАЛОСЬ");
+    }
+    return false;
   }
 
-  bool ok = bleChar->writeValue(const_cast<uint8_t*>(data), len, false);
-  return;
-  Serial.print(ok ? "✅ " : "❌ ");
-  Serial.print(desc + " | ");
-  for (size_t i = 0; i < len; i++) {
-    if (data[i] < 0x10) Serial.print("0");
-    Serial.print(String(data[i], HEX) + " ");
+  bool send(const uint8_t* data, size_t len) {
+    if (!connected || !characteristic) {
+      Serial.println("❌ " + mac + " не подключён");
+      return false;
+    }
+    return characteristic->writeValue(const_cast<uint8_t*>(data), len, false);
   }
-  Serial.println();
+};
+
+NimBLEUUID serviceUUID("0000FFE0-0000-1000-8000-00805F9B34FB");
+NimBLEUUID charUUID("0000FFE1-0000-1000-8000-00805F9B34FB");
+
+BLEDeviceControl* MainDevice = nullptr;   // c0:00:00:00:05:42
+BLEDeviceControl* SkyDevice  = nullptr;   // c0:00:00:00:04:ad
+
+class LightState {
+public:
+  uint8_t r = 255;
+  uint8_t g = 255;
+  uint8_t b = 255;
+  uint8_t brightness = 100;
+  bool power = true;
+  BLEDeviceControl device;
+  String name;
+  
+  LightState(BLEDeviceControl _device, String _name)
+  {
+    device = _device;
+    name = _name;
+  }
+
+  bool setColor(uint8_t nr, uint8_t ng, uint8_t nb, const uint8_t* data, size_t len) {
+    bool res = device->send(data, len);
+    if(res){
+      r = nr; g = ng; b = nb;
+    }
+    logCom(res, data, len);
+    return res;
+  }
+
+  bool setBright(uint8_t br, const uint8_t* data, size_t len) {
+    bool res = device->send(data, len);
+    if(res){
+      brightness = br;
+    }
+    logCom(res, data, len);
+    return res;
+  }
+
+  bool setPower(bool on, const uint8_t* data, size_t len) {
+    bool res = device->send(data, len);
+    if(res){
+      power = on;
+    }
+    logCom(res, data, len);
+    return res;
+  }
+
+  void logCom(bool res, const uint8_t* data, size_t len){
+    Serial.print(res ? "✅ " : "❌ ");
+    Serial.print(device->mac + " | " + name + " | ");
+    for (size_t i = 0; i < len; i++) Serial.printf("%02X ", data[i]);
+      Serial.println();
+  }
+};
+
+LightState* Line = nullptr;
+LightState* Lamp = nullptr;
+LightState* Sky = nullptr;
+
+void receiveCb(int howMany) {
+  if (howMany == 0) return;
+
+  lastCmd = Wire.read();
+  lastMessageTime = millis();
+
+  Serial.printf("I2C команда: 0x%02X\n", lastCmd);
+
+  switch (lastCmd) {
+    case REG_SetRed:
+      setRed();
+      break;
+
+    case REG_SetWhite:
+      setWhite();
+      break;
+
+    case REG_SetRGB:
+      if (howMany >= 4) {
+        uint8_t r = Wire.read();
+        uint8_t g = Wire.read();
+        uint8_t b = Wire.read();
+        setRGB(r, g, b);
+      }
+      break;
+
+    case REG_Power:
+      if (howMany >= 2) {
+        uint8_t state = Wire.read();
+        setPower(state == 1);
+      }
+      break;
+
+    case REG_GetStatus:
+    case REG_GetErrorCount:
+    case REG_GetNextError:
+      // ничего не делаем при приёме, ответ будет в requestCb()
+      break;
+  }
+}
+
+void requestCb() {
+  switch (lastCmd) {
+    case REG_GetStatus:
+      // Возвращаем простое состояние: 1 = включено, 0 = выключено
+      Wire.write(powerState ? 1 : 0);
+      break;
+
+    case REG_GetErrorCount:
+      Wire.write(0);        // заглушка
+      break;
+
+    case REG_GetNextError:
+      Wire.write(0);        // заглушка
+      break;
+
+    default:
+      Wire.write(0);
+  }
 }
 
 void power(bool on) {
   uint8_t cmd[9] = {0x7B, 0x00, 0x04, on ? 0x01 : 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xBF};
-  sendCommand(pRemoteChar, cmd, sizeof(cmd), on ? "ВКЛЮЧЕНИЕ" : "ВЫКЛЮЧЕНИЕ");
+  Line.setPower(on, cmd, sizeof(cmd));
 }
 
 void setColor(uint8_t r, uint8_t g, uint8_t b) {
-  uint8_t cmd[] = {0x7B, 0x00, 0x07, r, g, b, 0xFF, 0xFF, 0xBF};//0x00, 0xFF, 0xBF - тоже самое
-  sendCommand(pRemoteChar, cmd, sizeof(cmd), "Лента цвет");
+  uint8_t cmd[] = {0x7B, 0x00, 0x07, r, g, b, 0xFF, 0xFF, 0xBF};
+  Line.setColor(r, g, b, cmd, sizeof(cmd));
 }
 
 void setBright(uint8_t percent) {
   uint8_t cmd[] = {0x7B, 0xFF, 0x01, percent*32/100, percent, 0x00, 0xFF, 0xFF, 0xBF};
-  sendCommand(pRemoteChar, cmd, sizeof(cmd), "Лента яркость");
+  Line.setBright(percent, cmd, sizeof(cmd));
 }
 
 void powerRGB(bool on) {
   uint8_t cmd[9] = {0x7E, 0xFF, 0x04, on ? 0x01 : 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xEF};
-  sendCommand(pRemoteChar, cmd, sizeof(cmd), on ? "ВКЛЮЧЕНИЕ" : "ВЫКЛЮЧЕНИЕ");
+  Lamp.setPower(on, cmd, sizeof(cmd));
 }
 
 void setColorRGB(uint8_t r, uint8_t g, uint8_t b) {
   uint8_t cmd[] = {0x7E, 0xFF, 0x05, 0x03, r, g, b, 0xFF, 0xEF};
-  sendCommand(pRemoteChar, cmd, sizeof(cmd), "Подстаканники цвет");
+  Lamp.setColor(r, g, b, cmd, sizeof(cmd));
 }
 
 void setBrightRGB(uint8_t percent) {
   uint8_t cmd[] = {0x7E, 0xFF, 0x01, percent, 0x00, 0xFF, 0xFF, 0xFF, 0xEF};
-  sendCommand(pRemoteChar, cmd, sizeof(cmd), "Подстаканники яркость");
+  Lamp.setBright(percent, cmd, sizeof(cmd));
 }
 
 void powerSKY(bool on) {
   uint8_t cmd[9] = {0x7E, 0xFF, 0x04, on ? 0x01 : 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xEF};
-  sendCommand(pRemoteCharSky, cmd, sizeof(cmd), on ? "ВКЛЮЧЕНИЕ" : "ВЫКЛЮЧЕНИЕ");
+  Sky.setPower(on, cmd, sizeof(cmd));
 }
 
 void setColorSKY(uint8_t r, uint8_t g, uint8_t b) {
   uint8_t cmd[] = {0x7E, 0xFF, 0x05, 0x03, r, g, b, 0xFF, 0xEF};
-  sendCommand(pRemoteCharSky, cmd, sizeof(cmd), "Подстаканники цвет");
+  Sky.setColor(r, g, b, cmd, sizeof(cmd));
 }
 
 void setBrightSKY(uint8_t percent) {
   uint8_t cmd[] = {0x7E, 0x00, 0x01, percent, 0x00, 0xFF, 0xFF, 0xFF, 0xEF};
-  sendCommand(pRemoteCharSky, cmd, sizeof(cmd), "Подстаканники яркость");
-}
-
-void testCommands(const String& input) {
-  int start = 0;
-  int cmdNum = 0;
-
-  while (start < input.length()) {
-    int end = input.indexOf('\n', start);
-    if (end == -1) end = input.length();
-
-    String line = input.substring(start, end);
-    line.trim();
-    start = end + 1;
-
-    if (line.length() == 0) continue;
-
-    // Парсим байты через запятую
-    uint8_t buf[32];
-    size_t len = 0;
-    int pos = 0;
-
-    while (pos < line.length() && len < 32) {
-      int comma = line.indexOf(',', pos);
-      if (comma == -1) comma = line.length();
-      String byteStr = line.substring(pos, comma);
-      byteStr.trim();
-      buf[len++] = (uint8_t)strtol(byteStr.c_str(), nullptr, 16);
-      pos = comma + 1;
-    }
-
-    // Печатаем что отправляем
-    Serial.print("Команда #" + String(cmdNum++) + ": ");
-    for (size_t i = 0; i < len; i++) {
-      if (buf[i] < 0x10) Serial.print("0");
-      Serial.print(String(buf[i], HEX) + " ");
-    }
-    Serial.println();
-
-    sendCommand(pRemoteChar, buf, len, "TEST");
-    delay(2000); // пауза между командами чтобы увидеть эффект
-  }
-
-  Serial.println("Тест завершён");
-}
-
-void scanResultCallback(NimBLEAdvertisedDevice* device) {
-  Serial.print("Найденное устройство: ");
-  Serial.println(device->getAddress().toString().c_str());
-
-  if (device->haveName()) {
-    Serial.print("  Имя: ");
-    Serial.println(device->getName().c_str());
-  }
-}
-
-
-void connectToDevice(const String& deviceAddress) {
-  if (pClient && pClient->isConnected()) {
-    Serial.println("Уже подключены");
-    return;
-  }
-
-  Serial.print("Подключение к устройству: ");
-  Serial.println(deviceAddress);
-
-  if (pClient) {
-    NimBLEDevice::deleteClient(pClient);
-  }
-
-  pClient = NimBLEDevice::createClient();
-
-  NimBLEAddress address(deviceAddress.c_str(), BLE_ADDR_PUBLIC);
-  if (pClient->connect(address)) {
-    Serial.println("Успешное подключение!");
-    bleConnected=true;
-    // Добавляем задержку для стабилизации соединения
-    delay(1000);
-
-    // Получаем список сервисов
-    std::vector<NimBLERemoteService*> services = pClient->getServices(true);
-    if (services.empty()) {
-      Serial.println("  Сервисы не найдены. Возможно, устройство не транслирует их.");
-    } else {
-      Serial.print("  Найдено сервисов: ");
-      Serial.println(services.size());
-
-      for (auto& s : services) {
-        Serial.print("    Сервис: ");
-        Serial.println(s->getUUID().toString().c_str());
-
-        // Получаем характеристики для каждого сервиса
-        std::vector<NimBLERemoteCharacteristic*> characteristics = s->getCharacteristics(true);
-        if (characteristics.empty()) {
-          Serial.println("      Характеристик нет.");
-        } else {
-          Serial.print("      Найдено характеристик: ");
-          Serial.println(characteristics.size());
-
-          for (auto& c : characteristics) {
-            String id = c->getUUID().toString().c_str();
-            
-            Serial.print("        Характеристика: ");
-            Serial.println(id);
-            Serial.print("          Свойства: ");
-            if (c->canRead()) Serial.print("READ ");
-            if (c->canNotify()) Serial.print("NOTIFY ");
-            if (c->canWrite()) Serial.print("WRITE ");
-            Serial.println();
-
-            if(id=="0xffe1"){
-              pRemoteChar = c;
-              //isTest=true;
-              Serial.println("Ambient ready");
-            }
-
-            // Читаем значение, если можно
-            if (c->canRead()) {
-              std::string value = c->readValue();
-              Serial.print("          Значение: ");
-              Serial.println(value.empty() ? "пусто" : value.c_str());
-            }
-          }
-        }
-      }
-    }
-  } else {
-    Serial.println("Не удалось подключиться");
-    connectToDevice(deviceAddress);
-  }
-
-  //NimBLEDevice::deleteClient(pClient);
-}
-
-void connectToSky(const String& deviceAddress) {
-  if (pClientSky && pClientSky->isConnected()) {
-    Serial.println("Уже подключены");
-    return;
-  }
-
-  Serial.print("Подключение к устройству: ");
-  Serial.println(deviceAddress);
-
-  if (pClientSky) {
-    NimBLEDevice::deleteClient(pClientSky);
-  }
-
-  pClientSky = NimBLEDevice::createClient();
-
-  NimBLEAddress address(deviceAddress.c_str(), BLE_ADDR_PUBLIC);
-  if (pClientSky->connect(address)) {
-    Serial.println("Успешное подключение!");
-    bleConnected=true;
-    // Добавляем задержку для стабилизации соединения
-    delay(1000);
-
-    // Получаем список сервисов
-    std::vector<NimBLERemoteService*> services = pClientSky->getServices(true);
-    if (services.empty()) {
-      Serial.println("  Сервисы не найдены. Возможно, устройство не транслирует их.");
-    } else {
-      Serial.print("  Найдено сервисов: ");
-      Serial.println(services.size());
-
-      for (auto& s : services) {
-        Serial.print("    Сервис: ");
-        Serial.println(s->getUUID().toString().c_str());
-
-        // Получаем характеристики для каждого сервиса
-        std::vector<NimBLERemoteCharacteristic*> characteristics = s->getCharacteristics(true);
-        if (characteristics.empty()) {
-          Serial.println("      Характеристик нет.");
-        } else {
-          Serial.print("      Найдено характеристик: ");
-          Serial.println(characteristics.size());
-
-          for (auto& c : characteristics) {
-            String id = c->getUUID().toString().c_str();
-            
-            Serial.print("        Характеристика: ");
-            Serial.println(id);
-            Serial.print("          Свойства: ");
-            if (c->canRead()) Serial.print("READ ");
-            if (c->canNotify()) Serial.print("NOTIFY ");
-            if (c->canWrite()) Serial.print("WRITE ");
-            Serial.println();
-
-            if(id=="0xffe1"){
-              pRemoteCharSky = c;
-              //isTest=true;
-              Serial.println("StarSky ready");
-            }
-
-            // Читаем значение, если можно
-            if (c->canRead()) {
-              std::string value = c->readValue();
-              Serial.print("          Значение: ");
-              Serial.println(value.empty() ? "пусто" : value.c_str());
-            }
-          }
-        }
-      }
-    }
-  } else {
-    Serial.println("Не удалось подключиться");
-    connectToSky(deviceAddress);
-  }
+  Sky.setBright(percent, cmd, sizeof(cmd));
 }
 
 void setup() {
   Serial.begin(115200);
   NimBLEDevice::init("");
-  esp_log_level_set("*", ESP_LOG_VERBOSE); // Максимальный уровень логирования
+  NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
-  // NimBLEScan* pScan = NimBLEDevice::getScan();
-  // pScan->setActiveScan(true);
-  // pScan->setInterval(45);
-  // pScan->setWindow(15);
+  // Создаём объекты устройств
+  MainDevice = new BLEDeviceControl("c0:00:00:00:05:42");
+  SkyDevice  = new BLEDeviceControl("c0:00:00:00:04:ad");
 
-  // pScan->start(60, scanResultCallback);
+  // Запускаем подключение
+  if(MainDevice->connect())
+  {
+    Line = new LightState(MainDevice, "Линии");
+    Lamp = new LightState(MainDevice, "Подстаканники");
+  }
+  if(SkyDevice->connect())
+  {
+    Sky = new LightState(SkyDevice, "Звезды");
+  }
 
-  // Serial.println("Сканирование завершено.");
+  // I2C Slave
+  Wire.begin(SLAVE_ADDR);
+  Wire.onReceive(receiveCb);
+  Wire.onRequest(requestCb);
 
-  connectToDevice(targetDeviceAddress);
-  connectToSky(targetDeviceAddressSky);
+  Serial.println("I2C Slave запущен на адресе 0x" + String(SLAVE_ADDR, HEX));
 }
 
 void loop() {
-  if (!bleConnected && millis() - lastConnectAttempt > reconnectInterval) {
-    lastConnectAttempt = millis();
-    Serial.println("Попытка автоматического переподключения...");
-    NimBLEDevice::getScan()->start(8, false);
-  }
-
-  if (isTest) {
+ if (isTest) {
     if (numTest > 16) numTest = 0;
 
     if (numTest == 0) setColor(255, 0, 0);
@@ -395,34 +399,8 @@ void loop() {
       setColorRGB(constrain(r, 0, 255), constrain(g, 0, 255), constrain(b, 0, 255));
       setColorSKY(constrain(r, 0, 255), constrain(g, 0, 255), constrain(b, 0, 255));
     }
-    else if (command == "scan") {
-      Serial.println("Перезапуск сканирования:");
-      Serial.println(targetDeviceAddress);
-      BLEDevice::getScan()->start(15, false);
-    }
-    else if (command.startsWith("nscan ")) {
-      String nmac = command.substring(6);
-      targetDeviceAddress = nmac;
-      Serial.println("Перезапуск сканирования другого устройства:");
-      Serial.println(targetDeviceAddress);
-      BLEDevice::getScan()->start(15, false);
-    }
-    else if (command.startsWith("raw ")) {
-      String hex = command.substring(4);
-      uint8_t buf[32]; size_t len = 0;
-      char* ptr = (char*)hex.c_str();
-      while (*ptr && len < 32) {
-        sscanf(ptr, "%02X", &buf[len++]);
-        ptr += 2;
-      }
-      sendCommand(pRemoteChar, buf, len, "RAW");
-    }
     else if(command=="test"){
       isTest=!isTest;
-    }
-    else if (command == "tc"){
-      String cmds ="";
-      testCommands(cmds);
     }
     else {
       Serial.println("Доступные команды:");
