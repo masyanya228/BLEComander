@@ -190,31 +190,35 @@ void receiveCb(int howMany) {
   Serial.printf("I2C команда: 0x%02X\n", lastCmd);
 
   switch (lastCmd) {
+    case REG_Power:
+      // ожидаем: [REG_Power] [el] [0/1] → howMany=3
+      if (howMany >= 3) {
+        uint8_t target = Wire.read();
+        bool    state  = Wire.read() == 1;
+        Serial.printf("  Power target=%d state=%d\n", target, state);
+        cmd_power(target, state);
+      }
+      break;
+
     case REG_SetRGB:
-      if (howMany >= 4) {
-        uint8_t r = Wire.read();
-        uint8_t g = Wire.read();
-        uint8_t b = Wire.read();
-        setColor(r, g, b);
-        setColorRGB(r, g, b);
-        setColorSKY(r, g, b);
+      // ожидаем: [REG_SetRGB] [el] [r] [g] [b] → howMany=5
+      if (howMany >= 5) {
+        uint8_t target = Wire.read();
+        uint8_t r      = Wire.read();
+        uint8_t g      = Wire.read();
+        uint8_t b      = Wire.read();
+        Serial.printf("  SetRGB target=%d r=%d g=%d b=%d\n", target, r, g, b);
+        cmd_color(target, r, g, b);
       }
       break;
 
     case REG_SetBR:
-      if (howMany >= 2) {
-        uint8_t br = Wire.read();
-        setBright(br);
-        setBrightRGB(br);
-        setBrightSKY(br);
-      }
-      break;
-
-    case REG_Power:
+      // ожидаем: [REG_SetBR] [el] [br] → howMany=3
       if (howMany >= 3) {
-        uint8_t target = GetTarget();
-        bool state = Wire.read() == 1;
-        cmd_power(target, state);
+        uint8_t target = Wire.read();
+        uint8_t br     = Wire.read();
+        Serial.printf("  SetBR target=%d br=%d\n", target, br);
+        cmd_bright(target, br);
       }
       break;
 
@@ -226,13 +230,12 @@ void receiveCb(int howMany) {
 }
 
 /*
-1 - Line
-2 - Lamp
-3 - Sky
-4 - Line + Lamp
-5 - Lamp + Sky
-6 - Line + Sky
-7 - All
+1 - SKY
+2 - LINES
+3 - FLOOR
+4 - SKY + LINES
+5 - LINES + FLOOR
+6 - ALL
 */
 uint8_t GetTarget(){
   return Wire.read();
@@ -241,67 +244,61 @@ uint8_t GetTarget(){
 bool cmd_power(uint8_t target, bool state)
 {
   if(target==1)
-    return power(state);
-  if(target==2)
-    return powerRGB(state);
-  if(target==3)
     powerSKY(state);
+  if(target==2)
+    power(state);
+  if(target==3)
+    powerRGB(state);
   if(target==4){
-    return power(state) & powerRGB(state);
+    powerSKY(state); power(state);
   }
   if(target==5){
-    return powerRGB(state) & powerSKY(state);
+    power(state); powerRGB(state);
   }
   if(target==6){
-    return power(state) & powerSKY(state);
+    power(state); powerRGB(state); powerSKY(state);
   }
-  if(target==7){
-    return power(state) & powerRGB(state) & powerSKY(state);
-  }
+  return true;
 }
 
 bool cmd_color(uint8_t target, uint8_t r, uint8_t g, uint8_t b)
 {
   if(target==1)
-    return setColor(r, g, b);
-  if(target==2)
-    return setColorRGB(r, g, b);
-  if(target==3)
     setColorSKY(r, g, b);
+  if(target==2)
+    setColor(r, g, b);
+  if(target==3)
+    setColorRGB(r, g, b);
   if(target==4){
-    return setColor(r, g, b) & setColorRGB(r, g, b);
+    setColorSKY(r, g, b); setColor(r, g, b);
   }
   if(target==5){
-    return setColorRGB(r, g, b) & setColorSKY(r, g, b);
+    setColor(r, g, b); setColorRGB(r, g, b);
   }
   if(target==6){
-    return setColor(r, g, b) & setColorSKY(r, g, b);
+    setColor(r, g, b); setColorRGB(r, g, b); setColorSKY(r, g, b);
   }
-  if(target==7){
-    return setColor(r, g, b) & setColorRGB(r, g, b) & setColorSKY(r, g, b);
-  }
+  return true;
 }
 
 bool cmd_bright(uint8_t target, uint8_t br)
 {
   if(target==1)
-    return setBright(br);
-  if(target==2)
-    return setBrightRGB(br);
-  if(target==3)
     setBrightSKY(br);
+  if(target==2)
+    setBright(br);
+  if(target==3)
+    setBrightRGB(br);
   if(target==4){
-    return setBright(br) & setBrightRGB(br);
+    setBrightSKY(br); setBright(br);
   }
   if(target==5){
-    return setBrightRGB(br) & setBrightSKY(br);
+    setBright(br); setBrightRGB(br);
   }
   if(target==6){
-    return setBright(br) & setBrightSKY(br);
+    setBright(br); setBrightRGB(br); setBrightSKY(br);
   }
-  if(target==7){
-    return setBright(br) & setBrightRGB(br) & setBrightSKY(br);
-  }
+  return true;
 }
 
 void requestCb() {
@@ -323,9 +320,7 @@ void requestCb() {
       Wire.write(Sky ? Sky->b : 0);
       Wire.write(Sky ? Sky->br : 0);
       break;
-    case REG_Power:
-cmd_power
-      break;
+
     case REG_GetErrorCount:
     case REG_GetNextError:
     default:
