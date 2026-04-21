@@ -4,7 +4,7 @@ void InitEEPROM() {
   sizeErr = sizeof(errors[0]);
   errLen = sizeof(errors)/sizeErr;
     LoadErrors();                     // загружаем текущее состояние
-    if (true) {            // первый запуск
+    if (false) {            // первый запуск
         if (isDebug) Serial.println(F("EEPROM Init - first run"));
         int i = 0;
         while (true) {

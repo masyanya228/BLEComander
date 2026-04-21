@@ -229,21 +229,21 @@ void setBrightSKY(uint8_t pct) {
 
 // ─── Setup ───────────────────────────────────────────────────────────────────
 void setup() {
-  InitEEPROM();
   Serial.begin(115200);
+  //InitEEPROM();
   NimBLEDevice::init("");
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
-  MainDevice = new BLEDeviceControl("c0:00:00:00:05:42", AmbientLight);
-  SkyDevice  = new BLEDeviceControl("c0:00:00:00:04:ad", StarSky);
+  // MainDevice = new BLEDeviceControl("c0:00:00:00:05:42", AmbientLight);
+  // SkyDevice  = new BLEDeviceControl("c0:00:00:00:04:ad", StarSky);
 
-  if (MainDevice->connect()) {
-    Line = new LightState(MainDevice, "Линии");
-    Lamp = new LightState(MainDevice, "Подстаканники");
-  }
-  if (SkyDevice->connect()) {
-    Sky = new LightState(SkyDevice, "Звёзды");
-  }
+  // if (MainDevice->connect()) {
+  //   Line = new LightState(MainDevice, "Линии");
+  //   Lamp = new LightState(MainDevice, "Подстаканники");
+  // }
+  // if (SkyDevice->connect()) {
+  //   Sky = new LightState(SkyDevice, "Звёзды");
+  // }
 
   slave.onCommand(REG_PING, cmdPing);
   slave.onCommand(REG_GetErrorCount, cmdGetErrorCount);
@@ -258,6 +258,8 @@ void setup() {
 
 // ─── Loop ────────────────────────────────────────────────────────────────────
 void loop() {
+  slave.process();
+  return;
   if (isTest) {
     if (numTest > 16) numTest = 0;
     switch (numTest) {
@@ -321,7 +323,6 @@ void loop() {
       Serial.println("Команды: on | off | red | green | blue | white | color R G B | br 0-100 | blink [ms] | test");
     }
   }
-  slave.process();
   delay(50);
 }
 

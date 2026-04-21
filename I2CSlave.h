@@ -64,7 +64,7 @@ public:
 
         uint8_t reg = buf[0];
         bool handled = false;
-
+        Serial.println(reg);
         for (uint8_t i = 0; i < _handlerCount; i++) {
             if (_handlers[i].reg == reg) {
                 _handlers[i].handler(buf, len);
@@ -126,6 +126,7 @@ private:
     // ─── I2C Callbacks (ISR) ─────────────────────────────────────────────────
 
     void _onReceive(int numBytes) {
+        Serial.println("onRec");
         if (numBytes <= 0 || numBytes > RX_BUF_SIZE) return;
         if (_hasRequest) return;  // предыдущий запрос не обработан
 
@@ -137,6 +138,7 @@ private:
     }
 
     void _onRequest() {
+        Serial.println("onReq");
         if (!_isReady) {
             for (uint8_t i = 0; i < TX_BUF_SIZE; i++)
                 Wire.write(STATUS_BUSY);

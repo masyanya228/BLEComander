@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
 
-#define SLAVE_ADDR        40
+#define SLAVE_ADDR 40
 #define REG_Power         0x10
 #define REG_SetRGB        0x11
 #define REG_SetBR         0x12
