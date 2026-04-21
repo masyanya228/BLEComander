@@ -230,20 +230,20 @@ void setBrightSKY(uint8_t pct) {
 // ─── Setup ───────────────────────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
-  //InitEEPROM();
+  InitEEPROM();
   NimBLEDevice::init("");
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
-  // MainDevice = new BLEDeviceControl("c0:00:00:00:05:42", AmbientLight);
-  // SkyDevice  = new BLEDeviceControl("c0:00:00:00:04:ad", StarSky);
+  MainDevice = new BLEDeviceControl("c0:00:00:00:05:42", AmbientLight);
+  SkyDevice  = new BLEDeviceControl("c0:00:00:00:04:ad", StarSky);
 
-  // if (MainDevice->connect()) {
-  //   Line = new LightState(MainDevice, "Линии");
-  //   Lamp = new LightState(MainDevice, "Подстаканники");
-  // }
-  // if (SkyDevice->connect()) {
-  //   Sky = new LightState(SkyDevice, "Звёзды");
-  // }
+  if (MainDevice->connect()) {
+    Line = new LightState(MainDevice, "Линии");
+    Lamp = new LightState(MainDevice, "Подстаканники");
+  }
+  if (SkyDevice->connect()) {
+    Sky = new LightState(SkyDevice, "Звёзды");
+  }
 
   slave.onCommand(REG_PING, cmdPing);
   slave.onCommand(REG_GetErrorCount, cmdGetErrorCount);
@@ -259,7 +259,6 @@ void setup() {
 // ─── Loop ────────────────────────────────────────────────────────────────────
 void loop() {
   slave.process();
-  return;
   if (isTest) {
     if (numTest > 16) numTest = 0;
     switch (numTest) {
@@ -319,11 +318,29 @@ void loop() {
     } else if (command == "test") {
       isTest = !isTest;
       Serial.println(isTest ? "Тест включён" : "Тест выключен");
+    } else if (command == "eeprom init") {
+      Serial.println("Сброс памяти к заводским настройкам...");
+      FirstInit();
+      LoadErrors();
+      Serial.println("Готово");
+    } else if (command == "eeprom read") {
+      Serial.println("Вывод содержимого памяти...");
+      LoadErrors();
+      for(int i=0;i<errLen;i++)
+      {
+        Serial.print("#");
+        Serial.print(errors[i].code);
+        Serial.print("|");
+        Serial.print(errors[i].times);
+        Serial.print("|");
+        Serial.println(errors[i].tfs);
+      }
+      Serial.println("Готово");
     } else {
       Serial.println("Команды: on | off | red | green | blue | white | color R G B | br 0-100 | blink [ms] | test");
     }
   }
-  delay(50);
+  delay(5);
 }
 
 void cmd_power(const uint8_t* buf, uint8_t len)
@@ -399,29 +416,36 @@ void cmdPing(const uint8_t*, uint8_t) {
 }
 
 void cmdGetErrorCount(const uint8_t*, uint8_t) {
-    uint8_t count = 0;
-    for (uint8_t i = 0; i < errLen; i++)
-        if (errors[i].times > 0) count++;
-    slave.respondByte(count);
+  Serial.println("cmdGetErrorCount");
+  uint8_t count = 0;
+  for (uint8_t i = 0; i < errLen; i++)
+      if (errors[i].times > 0) count++;
+  uint8_t resp[2]={1, count};
+  Serial.println(count);
+  slave.respond(resp, sizeof(resp));
 }
 
 void cmdGetError(const uint8_t* buf, uint8_t len) {
-    uint8_t index = (len >= 2) ? buf[1] : 0;
-    uint8_t found = 0;
-    for (uint8_t i = 0; i < errLen; i++) {
-        if (errors[i].times == 0) continue;
-        if (found++ == index) {
-            uint8_t resp[7];
-            resp[0] = 1;
-            resp[1] = errors[i].code;
-            memcpy(&resp[2], &errors[i].tfs, 4);
-            resp[6] = errors[i].times;
-            slave.respond(resp, 7);
-            return;
-        }
+  Serial.print("getError #");
+  uint8_t index = (len >= 2) ? buf[1] : 0;
+  Serial.println(index);
+  uint8_t found = 0;
+  for (uint8_t i = 0; i < errLen; i++) {
+    if (errors[i].times == 0) continue;
+    if (found++ == index) {
+      Serial.print("Code: ");
+      Serial.println(errors[i].code);
+      uint8_t resp[7];
+      resp[0] = 1;
+      resp[1] = errors[i].code;
+      memcpy(&resp[2], &errors[i].tfs, 4);
+      resp[6] = errors[i].times;
+      slave.respond(resp, 7);
+      return;
     }
-    uint8_t resp[7] = {};
-    slave.respond(resp, 7);
+  }
+  uint8_t resp[7] = {};
+  slave.respond(resp, 7);
 }
 
 void cmdClearErrors(const uint8_t*, uint8_t) {

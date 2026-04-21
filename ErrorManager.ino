@@ -1,24 +1,30 @@
 #include <EEPROM.h>
 
 void InitEEPROM() {
+  EEPROM.begin(512);
   sizeErr = sizeof(errors[0]);
   errLen = sizeof(errors)/sizeErr;
-    LoadErrors();                     // загружаем текущее состояние
-    if (false) {            // первый запуск
-        if (isDebug) Serial.println(F("EEPROM Init - first run"));
-        int i = 0;
-        while (true) {
-            uint16_t code = pgm_read_word(&errorDescriptions[i].code);
-            if (code == 0) break;
+  if (false) {            // первый запуск
+    FirstInit();
+  }
+  LoadErrors();                     // загружаем текущее состояние
+}
 
-            errors[i].code  = code;
-            errors[i].tfs   = 0;
-            errors[i].times = 0;
-            i++;
-        }
-        EEPROM.put(0, errors);        // сохраняем только разрешённые коды
-        if (isDebug) Serial.print(F("Initialized ")); Serial.print(errLen); Serial.println(F(" error slots"));
-    }
+void FirstInit(){
+  if (isDebug) Serial.println(F("EEPROM Init - first run"));
+  int i = 0;
+  while (true) {
+      uint8_t code = pgm_read_word(&errorDescriptions[i].code);
+      if (code == 0) break;
+
+      errors[i].code  = code;
+      errors[i].tfs   = 0;
+      errors[i].times = 0;
+      i++;
+  }
+  EEPROM.put(0, errors);
+  EEPROM.commit();
+  if (isDebug) Serial.print(F("Initialized ")); Serial.print(errLen); Serial.println(F(" error slots"));
 }
 
 void LoadErrors() {
@@ -49,16 +55,20 @@ void SaveError(uint8_t code) {
     if (isDebug) { Serial.print(F("Error code ")); Serial.print(code); Serial.println(F(" not allowed")); }
     return;
   }
-  logI("encountered", code);
-
   int i = IndexOfError(code);
-  if (i == -1) return;
+  if (i == -1){
+    Serial.print(F("Error code ")); Serial.print(code); Serial.println(F(" not searched"));
+    return;
+  }
+  
+  logI("encountered", code);
 
   errors[i].times++;
   if (errors[i].tfs == 0) {
     errors[i].tfs = millis();
   }
   EEPROM.put(sizeErr * i, errors[i]);
+  EEPROM.commit();
 }
 
 void ClearAllErrors() {
@@ -67,6 +77,7 @@ void ClearAllErrors() {
     errors[i].times = 0;
   }
   EEPROM.put(0, errors);
+  EEPROM.commit();
   if (isDebug) Serial.println(F("All errors cleared (times and tfs reset)"));
 }
 
@@ -77,27 +88,4 @@ void ResetError(uint8_t code){
   errors[i].times=0;
   EEPROM.put(sizeErr*i, errors[i]);
   logI("reseted", code);
-}
-
-void SendError(int err){
-  uint8_t flag=0;
-  for(int i=0; i<errLen; i++)
-  {
-    if(errors[i].times>0)
-    {
-      if(err==0)
-      {
-        flag=1;
-        I2C_writeAnything(flag);
-        I2C_writeAnything(errors[i].code);
-        I2C_writeAnything(errors[i].tfs);
-        I2C_writeAnything(errors[i].times);
-        logI("SendError", errors[i].code);
-        return;
-      }
-      err--;
-    }
-  }
-  logI("SendError was UOR", nextError);
-  I2C_writeAnything(flag);
 }

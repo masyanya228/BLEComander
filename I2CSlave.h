@@ -37,7 +37,8 @@ public:
 
     void begin(uint8_t address = SLAVE_ADDR,
                int sda = 21, int scl = 22, uint32_t clock = 100000) {
-        Wire.begin((uint8_t)address, sda, scl);
+        Wire.begin((uint8_t)address);
+        Wire.setPins(21, 22);
         Wire.setClock(clock);
         Wire.onReceive([](int n) { instance->_onReceive(n); });
         Wire.onRequest([]()      { instance->_onRequest();  });
