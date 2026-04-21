@@ -1,23 +1,26 @@
+bool isDebug=true;
 #include <Wire.h>
 #include "NimBLEDevice.h"
+#include "I2CSlave.h"
 
-#define SLAVE_ADDR        40
-#define REG_Power         0x10
-#define REG_SetRGB        0x11
-#define REG_SetBR         0x12
-#define REG_GetLightStatus 0x13
-#define REG_GetErrorCount 0x06
-#define REG_GetNextError  0x07
+
+
+#define AmbientLight 0x01
+#define StarSky 0x02
+
+I2CSlave slave;
+void SaveError(uint8_t code);
 
 // ─── BLE устройство ──────────────────────────────────────────────────────────
 class BLEDeviceControl {
 public:
+  uint8_t type;
   String mac;
   NimBLEClient* client = nullptr;
   NimBLERemoteCharacteristic* characteristic = nullptr;
   bool connected = false;
 
-  BLEDeviceControl(const String& macAddress) : mac(macAddress) {}
+  BLEDeviceControl(const String& macAddress, uint8_t deviceType) : mac(macAddress), type(deviceType) {}
 
   bool connect() {
     if (connected && client && client->isConnected()) return true;
@@ -32,6 +35,7 @@ public:
 
     if (!client->connect(address)) {
       Serial.println("НЕ УДАЛОСЬ");
+      SaveError(type==AmbientLight?41:42);
       return false;
     }
 
@@ -42,6 +46,7 @@ public:
     std::vector<NimBLERemoteService*> services = client->getServices(true);
     if (services.empty()) {
       Serial.println("Сервисы не найдены.");
+      SaveError(type==AmbientLight?48:49);
       return false;
     }
 
@@ -68,7 +73,9 @@ public:
       Serial.println("  → Готово: FFE1 найдена");
       return true;
     }
-
+    else{
+      SaveError(type==AmbientLight?45:46);
+    }
     Serial.println("  → FFE1 не найдена");
     return false;
   }
@@ -77,6 +84,7 @@ public:
   bool send(const uint8_t* data) {
     if (!connected || !characteristic) {
       Serial.println("❌ " + mac + " не подключён");
+      SaveError(type==AmbientLight?52:53);
       return false;
     }
     return characteristic->writeValue(const_cast<uint8_t*>(data), 9, false);
@@ -117,6 +125,8 @@ public:
 
 private:
   void log(bool res, const uint8_t* data) {
+    if(!res)
+      SaveError(device->type==AmbientLight?54:55);
     Serial.print(res ? "✅ " : "❌ ");
     Serial.print(device->mac + " | " + name + " | ");
     for (size_t i = 0; i < 9; i++) Serial.printf("%02X ", data[i]);
@@ -134,6 +144,40 @@ LightState* Sky  = nullptr;
 bool isTest = false;
 int  numTest = 0;
 uint8_t lastCmd = 0;
+
+//Ошибки в памяти
+struct Error{
+  uint8_t code=0;
+  uint32_t tfs=0;
+  uint8_t times=0;
+};
+Error errors[10];
+int sizeErr;
+int errLen;
+int nextError=0;
+
+struct ErrorDesc {
+    uint8_t code;
+    const char* description;
+};
+const ErrorDesc errorDescriptions[] PROGMEM = {
+    {41,   "Ambient not scannable"},
+    {42,   "StarSky not scannable"},
+    {43,   "Ambient has no target service"},
+    {44,   "StarSky has no target service"},
+    {45,   "Ambient has no target characteristic"},
+    {46,   "StarSky has no target characteristic"},
+    {47,   "Not supproted i2c command"},
+    {48,   "Ambient has no services"},
+    {49,   "StarSky has no services"},
+    {50,   "Ambient has no characteristics"},
+    {51,   "StarSky has no characteristics"},
+    {52,   "Ambient still not ready to command"},
+    {53,   "StarSky still not ready to command"},
+    {54,   "Ambient bad response"},
+    {55,   "StarSky bad response"},
+    {0,   ""}   // terminator (обязательно в конце!)
+};
 
 // ─── Команды — Линии (подстаканники, канал 0) ────────────────────────────────
 void power(bool on) {
@@ -183,160 +227,15 @@ void setBrightSKY(uint8_t pct) {
   if (Sky) Sky->setBright(pct, cmd);
 }
 
-// ─── I2C ─────────────────────────────────────────────────────────────────────
-void receiveCb(int howMany) {
-  if (howMany == 0) return;
-  lastCmd = Wire.read();
-  Serial.printf("I2C команда: 0x%02X\n", lastCmd);
-
-  switch (lastCmd) {
-    case REG_Power:
-      // ожидаем: [REG_Power] [el] [0/1] → howMany=3
-      if (howMany >= 3) {
-        uint8_t target = Wire.read();
-        bool    state  = Wire.read() == 1;
-        Serial.printf("  Power target=%d state=%d\n", target, state);
-        cmd_power(target, state);
-      }
-      break;
-
-    case REG_SetRGB:
-      // ожидаем: [REG_SetRGB] [el] [r] [g] [b] → howMany=5
-      if (howMany >= 5) {
-        uint8_t target = Wire.read();
-        uint8_t r      = Wire.read();
-        uint8_t g      = Wire.read();
-        uint8_t b      = Wire.read();
-        Serial.printf("  SetRGB target=%d r=%d g=%d b=%d\n", target, r, g, b);
-        cmd_color(target, r, g, b);
-      }
-      break;
-
-    case REG_SetBR:
-      // ожидаем: [REG_SetBR] [el] [br] → howMany=3
-      if (howMany >= 3) {
-        uint8_t target = Wire.read();
-        uint8_t br     = Wire.read();
-        Serial.printf("  SetBR target=%d br=%d\n", target, br);
-        cmd_bright(target, br);
-      }
-      break;
-
-    case REG_GetLightStatus:
-    case REG_GetErrorCount:
-    case REG_GetNextError:
-      break;  // ответ в requestCb
-  }
-}
-
-/*
-1 - SKY
-2 - LINES
-3 - FLOOR
-4 - SKY + LINES
-5 - LINES + FLOOR
-6 - ALL
-*/
-uint8_t GetTarget(){
-  return Wire.read();
-}
-
-bool cmd_power(uint8_t target, bool state)
-{
-  if(target==1)
-    powerSKY(state);
-  if(target==2)
-    power(state);
-  if(target==3)
-    powerRGB(state);
-  if(target==4){
-    powerSKY(state); power(state);
-  }
-  if(target==5){
-    power(state); powerRGB(state);
-  }
-  if(target==6){
-    power(state); powerRGB(state); powerSKY(state);
-  }
-  return true;
-}
-
-bool cmd_color(uint8_t target, uint8_t r, uint8_t g, uint8_t b)
-{
-  if(target==1)
-    setColorSKY(r, g, b);
-  if(target==2)
-    setColor(r, g, b);
-  if(target==3)
-    setColorRGB(r, g, b);
-  if(target==4){
-    setColorSKY(r, g, b); setColor(r, g, b);
-  }
-  if(target==5){
-    setColor(r, g, b); setColorRGB(r, g, b);
-  }
-  if(target==6){
-    setColor(r, g, b); setColorRGB(r, g, b); setColorSKY(r, g, b);
-  }
-  return true;
-}
-
-bool cmd_bright(uint8_t target, uint8_t br)
-{
-  if(target==1)
-    setBrightSKY(br);
-  if(target==2)
-    setBright(br);
-  if(target==3)
-    setBrightRGB(br);
-  if(target==4){
-    setBrightSKY(br); setBright(br);
-  }
-  if(target==5){
-    setBright(br); setBrightRGB(br);
-  }
-  if(target==6){
-    setBright(br); setBrightRGB(br); setBrightSKY(br);
-  }
-  return true;
-}
-
-void requestCb() {
-  switch (lastCmd) {
-    case REG_GetLightStatus:
-      Wire.write(Line ? (Line->power ? 1 : 0) : 2);
-      Wire.write(Lamp ? (Lamp->power ? 1 : 0) : 2);
-      Wire.write(Sky ? (Sky->power ? 1 : 0) : 2);
-      Wire.write(Line ? Line->r : 0);
-      Wire.write(Line ? Line->g : 0);
-      Wire.write(Line ? Line->b : 0);
-      Wire.write(Line ? Line->br : 0);
-      Wire.write(Lamp ? Lamp->r : 0);
-      Wire.write(Lamp ? Lamp->g : 0);
-      Wire.write(Lamp ? Lamp->b : 0);
-      Wire.write(Lamp ? Lamp->br : 0);
-      Wire.write(Sky ? Sky->r : 0);
-      Wire.write(Sky ? Sky->g : 0);
-      Wire.write(Sky ? Sky->b : 0);
-      Wire.write(Sky ? Sky->br : 0);
-      break;
-
-    case REG_GetErrorCount:
-    case REG_GetNextError:
-    default:
-      Wire.write(0);
-      break;
-  }
-}
-
 // ─── Setup ───────────────────────────────────────────────────────────────────
 void setup() {
+  InitEEPROM();
   Serial.begin(115200);
   NimBLEDevice::init("");
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
-  MainDevice = new BLEDeviceControl("c0:00:00:00:05:42");
-  SkyDevice  = new BLEDeviceControl("c0:00:00:00:04:ad");
+  MainDevice = new BLEDeviceControl("c0:00:00:00:05:42", AmbientLight);
+  SkyDevice  = new BLEDeviceControl("c0:00:00:00:04:ad", StarSky);
 
   if (MainDevice->connect()) {
     Line = new LightState(MainDevice, "Линии");
@@ -346,11 +245,15 @@ void setup() {
     Sky = new LightState(SkyDevice, "Звёзды");
   }
 
-  Wire.begin(SLAVE_ADDR);
-  Wire.onReceive(receiveCb);
-  Wire.onRequest(requestCb);
+  slave.onCommand(REG_PING, cmdPing);
+  slave.onCommand(REG_GetErrorCount, cmdGetErrorCount);
+  slave.onCommand(REG_GetNextError, cmdGetError);
+  slave.onCommand(REG_ClearErrors, cmdClearErrors);
+  slave.onCommand(REG_Power, cmd_power);
+  slave.onCommand(REG_SetRGB, cmd_color);
+  slave.onCommand(REG_SetBR, cmd_bright);
 
-  Serial.println("I2C Slave: 0x" + SLAVE_ADDR);
+  slave.begin();
 }
 
 // ─── Loop ────────────────────────────────────────────────────────────────────
@@ -418,6 +321,123 @@ void loop() {
       Serial.println("Команды: on | off | red | green | blue | white | color R G B | br 0-100 | blink [ms] | test");
     }
   }
-
+  slave.process();
   delay(50);
+}
+
+void cmd_power(const uint8_t* buf, uint8_t len)
+{
+  uint8_t target = buf[0];
+  bool state = buf[1];
+  if(target==1)
+    powerSKY(state);
+  if(target==2)
+    power(state);
+  if(target==3)
+    powerRGB(state);
+  if(target==4){
+    powerSKY(state); power(state);
+  }
+  if(target==5){
+    power(state); powerRGB(state);
+  }
+  if(target==6){
+    power(state); powerRGB(state); powerSKY(state);
+  }
+  slave.respondByte(0x01);
+}
+
+void cmd_color(const uint8_t* buf, uint8_t len)
+{
+  uint8_t target = buf[0];
+  uint8_t r=buf[1];
+  uint8_t g=buf[2];
+  uint8_t b=buf[3];
+  if(target==1)
+    setColorSKY(r, g, b);
+  if(target==2)
+    setColor(r, g, b);
+  if(target==3)
+    setColorRGB(r, g, b);
+  if(target==4){
+    setColorSKY(r, g, b); setColor(r, g, b);
+  }
+  if(target==5){
+    setColor(r, g, b); setColorRGB(r, g, b);
+  }
+  if(target==6){
+    setColor(r, g, b); setColorRGB(r, g, b); setColorSKY(r, g, b);
+  }
+  slave.respondByte(0x01);
+}
+
+void cmd_bright(const uint8_t* buf, uint8_t len)
+{
+  uint8_t target=buf[0];
+  uint8_t br=buf[1];
+  if(target==1)
+    setBrightSKY(br);
+  if(target==2)
+    setBright(br);
+  if(target==3)
+    setBrightRGB(br);
+  if(target==4){
+    setBrightSKY(br); setBright(br);
+  }
+  if(target==5){
+    setBright(br); setBrightRGB(br);
+  }
+  if(target==6){
+    setBright(br); setBrightRGB(br); setBrightSKY(br);
+  }
+  slave.respondByte(0x01);
+}
+
+void cmdPing(const uint8_t*, uint8_t) {
+    slave.respondByte(0x01);
+}
+
+void cmdGetErrorCount(const uint8_t*, uint8_t) {
+    uint8_t count = 0;
+    for (uint8_t i = 0; i < errLen; i++)
+        if (errors[i].times > 0) count++;
+    slave.respondByte(count);
+}
+
+void cmdGetError(const uint8_t* buf, uint8_t len) {
+    uint8_t index = (len >= 2) ? buf[1] : 0;
+    uint8_t found = 0;
+    for (uint8_t i = 0; i < errLen; i++) {
+        if (errors[i].times == 0) continue;
+        if (found++ == index) {
+            uint8_t resp[7];
+            resp[0] = 1;
+            resp[1] = errors[i].code;
+            memcpy(&resp[2], &errors[i].tfs, 4);
+            resp[6] = errors[i].times;
+            slave.respond(resp, 7);
+            return;
+        }
+    }
+    uint8_t resp[7] = {};
+    slave.respond(resp, 7);
+}
+
+void cmdClearErrors(const uint8_t*, uint8_t) {
+    memset(errors, 0, sizeof(errors));
+    slave.respondByte(0x01);
+}
+
+void logS(String str){
+  if(!isDebug)
+    return;
+  Serial.println(str);
+}
+
+void logI(String str, int i){
+  if(!isDebug)
+    return;
+  Serial.print(str);
+  Serial.print(" : ");
+  Serial.println(i);
 }
