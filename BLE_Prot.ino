@@ -143,7 +143,6 @@ LightState* Lamp = nullptr;
 
 bool isTest = false;
 int  numTest = 0;
-uint8_t lastCmd = 0;
 
 //Ошибки в памяти
 struct Error{
@@ -151,7 +150,7 @@ struct Error{
   uint32_t tfs=0;
   uint8_t times=0;
 };
-Error errors[10];
+Error errors[15];
 int sizeErr;
 int errLen;
 int nextError=0;
@@ -288,7 +287,7 @@ void loop() {
       }
       Serial.println("Готово");
     } else {
-      Serial.println("Команды: on | off | red | green | blue | white | color R G B | br 0-100 | blink [ms] | test");
+      Serial.println("Команды: on | off | red | green | blue | white | color R G B | br 0-100 | blink [ms] | test | eeprom init | eeprom read");
     }
   }
   delay(5);
