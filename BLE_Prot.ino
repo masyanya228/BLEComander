@@ -28,7 +28,7 @@ public:
     if (client) NimBLEDevice::deleteClient(client);
 
     client = NimBLEDevice::createClient();
-    client->setConnectTimeout(10);
+    client->setConnectTimeout(1000);
 
     NimBLEAddress address(mac.c_str(), BLE_ADDR_PUBLIC);
     Serial.print("Подключение к " + mac + " ... ");
@@ -36,7 +36,7 @@ public:
     if (!client->connect(address)) {
       Serial.println("НЕ УДАЛОСЬ");
       SaveError(type==AmbientLight?41:42);
-      return false;
+      return connect();
     }
 
     Serial.println("OK");
@@ -137,9 +137,9 @@ private:
 // ─── Глобальные объекты ───────────────────────────────────────────────────────
 BLEDeviceControl* MainDevice = nullptr;
 BLEDeviceControl* SkyDevice  = nullptr;
+LightState* Sky  = nullptr;
 LightState* Line = nullptr;
 LightState* Lamp = nullptr;
-LightState* Sky  = nullptr;
 
 bool isTest = false;
 int  numTest = 0;
@@ -179,55 +179,6 @@ const ErrorDesc errorDescriptions[] PROGMEM = {
     {0,   ""}   // terminator (обязательно в конце!)
 };
 
-// ─── Команды — Линии (подстаканники, канал 0) ────────────────────────────────
-void power(bool on) {
-  uint8_t cmd[9] = {0x7B, 0x00, 0x04, on ? 0x01 : 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xBF};
-  if (Line) Line->setPower(on, cmd);
-}
-
-void setColor(uint8_t r, uint8_t g, uint8_t b) {
-  uint8_t cmd[9] = {0x7B, 0x00, 0x07, r, g, b, 0xFF, 0xFF, 0xBF};
-  if (Line) Line->setColor(r, g, b, cmd);
-}
-
-void setBright(uint8_t pct) {
-  uint8_t cmd[9] = {0x7B, 0xFF, 0x01, (uint8_t)(pct * 32 / 100), pct, 0x00, 0xFF, 0xFF, 0xBF};
-  if (Line) Line->setBright(pct, cmd);
-}
-
-// ─── Команды — Подсветка RGB (Лампы/Lamp) ────────────────────────────────────
-void powerRGB(bool on) {
-  uint8_t cmd[9] = {0x7E, 0xFF, 0x04, on ? 0x01 : 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xEF};
-  if (Lamp) Lamp->setPower(on, cmd);
-}
-
-void setColorRGB(uint8_t r, uint8_t g, uint8_t b) {
-  uint8_t cmd[9] = {0x7E, 0xFF, 0x05, 0x03, r, g, b, 0xFF, 0xEF};
-  if (Lamp) Lamp->setColor(r, g, b, cmd);
-}
-
-void setBrightRGB(uint8_t pct) {
-  uint8_t cmd[9] = {0x7E, 0xFF, 0x01, pct, 0x00, 0xFF, 0xFF, 0xFF, 0xEF};
-  if (Lamp) Lamp->setBright(pct, cmd);
-}
-
-// ─── Команды — Звёздное небо ──────────────────────────────────────────────────
-void powerSKY(bool on) {
-  uint8_t cmd[9] = {0x7E, 0xFF, 0x04, on ? 0x01 : 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xEF};
-  if (Sky) Sky->setPower(on, cmd);
-}
-
-void setColorSKY(uint8_t r, uint8_t g, uint8_t b) {
-  uint8_t cmd[9] = {0x7E, 0xFF, 0x05, 0x03, r, g, b, 0xFF, 0xEF};
-  if (Sky) Sky->setColor(r, g, b, cmd);
-}
-
-void setBrightSKY(uint8_t pct) {
-  uint8_t cmd[9] = {0x7E, 0x00, 0x01, pct, 0x00, 0xFF, 0xFF, 0xFF, 0xEF};
-  if (Sky) Sky->setBright(pct, cmd);
-}
-
-// ─── Setup ───────────────────────────────────────────────────────────────────
 void setup() {
   Serial.begin(115200);
   InitEEPROM();
@@ -235,7 +186,7 @@ void setup() {
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
   MainDevice = new BLEDeviceControl("c0:00:00:00:05:42", AmbientLight);
-  SkyDevice  = new BLEDeviceControl("c0:00:00:00:04:ad", StarSky);
+  SkyDevice  = new BLEDeviceControl("a4:c1:38:20:30:0e", StarSky);
 
   if (MainDevice->connect()) {
     Line = new LightState(MainDevice, "Линии");
@@ -252,7 +203,7 @@ void setup() {
   slave.onCommand(REG_Power, cmd_power);
   slave.onCommand(REG_SetRGB, cmd_color);
   slave.onCommand(REG_SetBR, cmd_bright);
-
+  slave.onCommand(REG_GetLightStatus, cmd_getLightStatus);
   slave.begin();
 }
 
@@ -343,10 +294,59 @@ void loop() {
   delay(5);
 }
 
+// ─── Команды — Линии (подстаканники, канал 0) ────────────────────────────────
+void power(bool on) {
+  uint8_t cmd[9] = {0x7B, 0x00, 0x04, on ? 0x01 : 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xBF};
+  if (Line) Line->setPower(on, cmd);
+}
+
+void setColor(uint8_t r, uint8_t g, uint8_t b) {
+  uint8_t cmd[9] = {0x7B, 0x00, 0x07, r, g, b, 0xFF, 0xFF, 0xBF};
+  if (Line) Line->setColor(r, g, b, cmd);
+}
+
+void setBright(uint8_t pct) {
+  uint8_t cmd[9] = {0x7B, 0xFF, 0x01, (uint8_t)(pct * 32 / 100), pct, 0x00, 0xFF, 0xFF, 0xBF};
+  if (Line) Line->setBright(pct, cmd);
+}
+
+// ─── Команды — Подсветка RGB (Лампы/Lamp) ────────────────────────────────────
+void powerRGB(bool on) {
+  uint8_t cmd[9] = {0x7E, 0xFF, 0x04, on ? 0x01 : 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xEF};
+  if (Lamp) Lamp->setPower(on, cmd);
+}
+
+void setColorRGB(uint8_t r, uint8_t g, uint8_t b) {
+  uint8_t cmd[9] = {0x7E, 0xFF, 0x05, 0x03, r, g, b, 0xFF, 0xEF};
+  if (Lamp) Lamp->setColor(r, g, b, cmd);
+}
+
+void setBrightRGB(uint8_t pct) {
+  uint8_t cmd[9] = {0x7E, 0xFF, 0x01, pct, 0x00, 0xFF, 0xFF, 0xFF, 0xEF};
+  if (Lamp) Lamp->setBright(pct, cmd);
+}
+
+// ─── Команды — Звёздное небо ──────────────────────────────────────────────────
+void powerSKY(bool on) {
+  uint8_t cmd[9] = {0x7E, 0xFF, 0x04, on ? 0x01 : 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xEF};
+  if (Sky) Sky->setPower(on, cmd);
+}
+
+void setColorSKY(uint8_t r, uint8_t g, uint8_t b) {
+  uint8_t cmd[9] = {0x7E, 0xFF, 0x05, 0x03, r, g, b, 0xFF, 0xEF};
+  if (Sky) Sky->setColor(r, g, b, cmd);
+}
+
+void setBrightSKY(uint8_t pct) {
+  uint8_t cmd[9] = {0x7E, 0x00, 0x01, pct, 0x00, 0xFF, 0xFF, 0xFF, 0xEF};
+  if (Sky) Sky->setBright(pct, cmd);
+}
+
+//I2C commands
 void cmd_power(const uint8_t* buf, uint8_t len)
 {
-  uint8_t target = buf[0];
-  bool state = buf[1];
+  uint8_t target = buf[1];
+  bool state = buf[2];
   if(target==1)
     powerSKY(state);
   if(target==2)
@@ -367,10 +367,10 @@ void cmd_power(const uint8_t* buf, uint8_t len)
 
 void cmd_color(const uint8_t* buf, uint8_t len)
 {
-  uint8_t target = buf[0];
-  uint8_t r=buf[1];
-  uint8_t g=buf[2];
-  uint8_t b=buf[3];
+  uint8_t target = buf[1];
+  uint8_t r=buf[2];
+  uint8_t g=buf[3];
+  uint8_t b=buf[4];
   if(target==1)
     setColorSKY(r, g, b);
   if(target==2)
@@ -391,8 +391,13 @@ void cmd_color(const uint8_t* buf, uint8_t len)
 
 void cmd_bright(const uint8_t* buf, uint8_t len)
 {
-  uint8_t target=buf[0];
-  uint8_t br=buf[1];
+  uint8_t target=buf[1];
+  uint8_t br=buf[2];
+  Serial.print("I2C br: ");
+  Serial.print(target);
+  Serial.print("=");
+  Serial.print(br);
+  Serial.println("%");
   if(target==1)
     setBrightSKY(br);
   if(target==2)
@@ -411,12 +416,33 @@ void cmd_bright(const uint8_t* buf, uint8_t len)
   slave.respondByte(0x01);
 }
 
+void cmd_getLightStatus(const uint8_t*, uint8_t) {
+  uint8_t resp[16];
+  resp[0] = 1;
+  resp[1] = Sky->power;
+  resp[2] = Sky->r;
+  resp[3] = Sky->g;
+  resp[4] = Sky->b;
+  resp[5] = Sky->br;
+  resp[6] = Line->power;
+  resp[7] = Line->r;
+  resp[8] = Line->g;
+  resp[9] = Line->b;
+  resp[10] = Line->br;
+  resp[11] = Lamp->power;
+  resp[12] = Lamp->r;
+  resp[13] = Lamp->g;
+  resp[14] = Lamp->b;
+  resp[15] = Lamp->br;
+  slave.respond(resp, 16);
+}
+
 void cmdPing(const uint8_t*, uint8_t) {
-    slave.respondByte(0x01);
+  slave.respondByte(0x01);
 }
 
 void cmdGetErrorCount(const uint8_t*, uint8_t) {
-  Serial.println("cmdGetErrorCount");
+  Serial.print("cmdGetErrorCount: ");
   uint8_t count = 0;
   for (uint8_t i = 0; i < errLen; i++)
       if (errors[i].times > 0) count++;
@@ -449,8 +475,9 @@ void cmdGetError(const uint8_t* buf, uint8_t len) {
 }
 
 void cmdClearErrors(const uint8_t*, uint8_t) {
-    memset(errors, 0, sizeof(errors));
-    slave.respondByte(0x01);
+  Serial.println("cmdClearErrors");
+  memset(errors, 0, sizeof(errors));
+  slave.respondByte(0x01);
 }
 
 void logS(String str){

@@ -75,6 +75,7 @@ public:
         }
 
         if (!handled) {
+            Serial.println("Не известная команда: "+reg);
             // Неизвестная команда
             uint8_t resp[] = {STATUS_ERROR};
             respond(resp, 1);
@@ -127,7 +128,6 @@ private:
     // ─── I2C Callbacks (ISR) ─────────────────────────────────────────────────
 
     void _onReceive(int numBytes) {
-        Serial.println("onRec");
         if (numBytes <= 0 || numBytes > RX_BUF_SIZE) return;
         if (_hasRequest) return;  // предыдущий запрос не обработан
 
@@ -139,7 +139,6 @@ private:
     }
 
     void _onRequest() {
-        Serial.println("onReq");
         if (!_isReady) {
             for (uint8_t i = 0; i < TX_BUF_SIZE; i++)
                 Wire.write(STATUS_BUSY);
