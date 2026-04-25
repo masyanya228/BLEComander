@@ -169,12 +169,12 @@ const ErrorDesc errorDescriptions[] PROGMEM = {
     {47,   "Not supproted i2c command"},
     {48,   "Ambient has no services"},
     {49,   "StarSky has no services"},
-    {50,   "Ambient has no characteristics"},
-    {51,   "StarSky has no characteristics"},
-    {52,   "Ambient still not ready to command"},
-    {53,   "StarSky still not ready to command"},
-    {54,   "Ambient bad response"},
-    {55,   "StarSky bad response"},
+    {60,   "Ambient has no characteristics"},
+    {61,   "StarSky has no characteristics"},
+    {62,   "Ambient still not ready to command"},
+    {63,   "StarSky still not ready to command"},
+    {64,   "Ambient bad response"},
+    {65,   "StarSky bad response"},
     {0,   ""}   // terminator (обязательно в конце!)
 };
 
