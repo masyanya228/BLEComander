@@ -95,18 +95,61 @@ public:
 class LightState {
 public:
   uint8_t r = 255, g = 255, b = 255;
+  uint8_t _startR = r, _startG = g, _startB = b;
+  uint8_t _targetR = r, _targetG = g, _targetB = b;
+  uint8_t _maxFrames=5;
+  uint16_t _animLen=800;
+  uint8_t _frame = 1;
+  unsigned long _frameStart = 0;
+  bool _animating  = false;
+  uint8_t rPos=3, gPos=4, bPos=5;
+  uint8_t colorCmd[9];
+
   uint8_t br = 100;
   bool power = true;
   BLEDeviceControl* device;  // указатель, не копия
   String name;
 
-  LightState(BLEDeviceControl* dev, const String& n) : device(dev), name(n) {}
+  LightState(BLEDeviceControl* dev, const String& n,
+    const uint8_t cmd[9], uint8_t rp, uint8_t gp, uint8_t bp)
+    : device(dev), name(n), rPos(rp), gPos(gp), bPos(bp)
+  {
+    memcpy(colorCmd, cmd, 9);
+  }
 
-  bool setColor(uint8_t nr, uint8_t ng, uint8_t nb, const uint8_t* data) {
-    bool res = device->send(data);
+  bool setColorAnim(uint8_t nr, uint8_t ng, uint8_t nb) {
+    _animating=true;
+    _startR=r; _startG=g; _startB=b;
+    _targetR=nr; _targetG=ng; _targetB=nb;
+    _frame=1;
+    _frameStart=millis();
+    return _setColorAnimFrame(_frame);
+  }
+
+  bool setColor(uint8_t nr, uint8_t ng, uint8_t nb) {
+    colorCmd[rPos]=nr;
+    colorCmd[gPos]=ng;
+    colorCmd[bPos]=nb;
+    _animating=false;
+    bool res = device->send(colorCmd);
     if (res) { r = nr; g = ng; b = nb; }
-    log(res, data);
+    log(res, colorCmd);
     return res;
+  }
+
+  void tick() {
+    if (!_animating) return;
+    byte tickByFrame=_animLen/(_maxFrames-1);
+    byte curFrame=(millis()-_frameStart)/tickByFrame+1;
+    if (curFrame <= _frame) return;
+    
+    _frame=curFrame;
+
+    if (_frame >= _maxFrames) {
+      // Последний кадр - останавливаем анимацию
+      _animating = false;
+    }
+    _setColorAnimFrame(_frame);
   }
 
   bool setBright(uint8_t nbr, const uint8_t* data) {
@@ -131,6 +174,19 @@ private:
     Serial.print(device->mac + " | " + name + " | ");
     for (size_t i = 0; i < 9; i++) Serial.printf("%02X ", data[i]);
     Serial.println();
+  }
+
+  bool _setColorAnimFrame(uint8_t frame){
+    uint8_t nr = _startR+(int16_t)(_targetR-_startR)*(_frame)/_maxFrames;
+    uint8_t ng = _startG+(int16_t)(_targetG-_startG)*(_frame)/_maxFrames;
+    uint8_t nb = _startB+(int16_t)(_targetB-_startB)*(_frame)/_maxFrames;
+    colorCmd[rPos]=nr;
+    colorCmd[gPos]=ng;
+    colorCmd[bPos]=nb;
+    bool res = device->send(colorCmd);
+    if (res) { r = nr; g = ng; b = nb; }
+    log(res, colorCmd);
+    return res;
   }
 };
 
@@ -175,7 +231,7 @@ const ErrorDesc errorDescriptions[] PROGMEM = {
     {63,   "StarSky still not ready to command"},
     {64,   "Ambient bad response"},
     {65,   "StarSky bad response"},
-    {0,   ""}   // terminator (обязательно в конце!)
+    {0,   ""} // terminator (обязательно в конце!)
 };
 
 void setup() {
@@ -187,12 +243,16 @@ void setup() {
   MainDevice = new BLEDeviceControl("c0:00:00:00:05:42", AmbientLight);
   SkyDevice  = new BLEDeviceControl("a4:c1:38:20:30:0e", StarSky);
 
+  static const uint8_t CMD_LINE[9] = {0x7B, 0x00, 0x07, 0, 0, 0, 0xFF, 0xFF, 0xBF};
+  static const uint8_t CMD_LAMP[9] = {0x7E, 0xFF, 0x05, 0x03, 0, 0, 0, 0xFF, 0xEF};
+  static const uint8_t CMD_SKY[9]  = {0x7E, 0xFF, 0x05, 0x03, 0, 0, 0, 0xFF, 0xEF};
+
   if (MainDevice->connect()) {
-    Line = new LightState(MainDevice, "Линии");
-    Lamp = new LightState(MainDevice, "Подстаканники");
+    Line = new LightState(MainDevice, "Линии", CMD_LINE, 3, 4, 5);
+    Lamp = new LightState(MainDevice, "Подстаканники", CMD_LAMP, 4, 5, 6);
   }
   if (SkyDevice->connect()) {
-    Sky = new LightState(SkyDevice, "Звёзды");
+    Sky  = new LightState(SkyDevice, "Звёзды", CMD_SKY, 4, 5, 6);
   }
 
   slave.onCommand(REG_PING, cmdPing);
@@ -212,23 +272,23 @@ void loop() {
   if (isTest) {
     if (numTest > 16) numTest = 0;
     switch (numTest) {
-      case 0:  setColor(255, 0, 0);        break;
-      case 1:  setColor(0, 255, 0);        break;
-      case 2:  setColor(0, 0, 255);        break;
-      case 3:  setColor(255, 255, 255);    break;
-      case 4:  setBright(10);              break;
-      case 5:  setBright(50);              break;
-      case 6:  setBright(100);             break;
-      case 7:  power(false);               break;
-      case 8:  power(true);                break;
-      case 9:  setColorRGB(255, 0, 0);     break;
-      case 10: setColorRGB(0, 255, 0);     break;
-      case 11: setColorRGB(0, 0, 255);     break;
+      case 0:  setColor(255, 0, 0); break;
+      case 1:  setColor(0, 255, 0); break;
+      case 2:  setColor(0, 0, 255); break;
+      case 3:  setColor(255, 255, 255); break;
+      case 4:  setBright(10); break;
+      case 5:  setBright(50); break;
+      case 6:  setBright(100); break;
+      case 7:  power(false); break;
+      case 8:  power(true); break;
+      case 9:  setColorRGB(255, 0, 0); break;
+      case 10: setColorRGB(0, 255, 0); break;
+      case 11: setColorRGB(0, 0, 255); break;
       case 12: setColorRGB(255, 255, 255); break;
-      case 13: setBrightRGB(10);           break;
-      case 14: setBrightRGB(60);           break;
-      case 15: powerRGB(false);            break;
-      case 16: powerRGB(true);             break;
+      case 13: setBrightRGB(10); break;
+      case 14: setBrightRGB(60); break;
+      case 15: powerRGB(false); break;
+      case 16: powerRGB(true); break;
     }
     numTest++;
     delay(100);
@@ -290,18 +350,20 @@ void loop() {
       Serial.println("Команды: on | off | red | green | blue | white | color R G B | br 0-100 | blink [ms] | test | eeprom init | eeprom read");
     }
   }
+  Line->tick();
+  Lamp->tick();
+  Sky->tick();
   delay(5);
 }
 
-// ─── Команды — Линии (подстаканники, канал 0) ────────────────────────────────
+// ─── Команды — Линии───────────────────────────
 void power(bool on) {
   uint8_t cmd[9] = {0x7B, 0x00, 0x04, on ? 0x01 : 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xBF};
   if (Line) Line->setPower(on, cmd);
 }
 
 void setColor(uint8_t r, uint8_t g, uint8_t b) {
-  uint8_t cmd[9] = {0x7B, 0x00, 0x07, r, g, b, 0xFF, 0xFF, 0xBF};
-  if (Line) Line->setColor(r, g, b, cmd);
+  if (Line) Line->setColorAnim(r, g, b);
 }
 
 void setBright(uint8_t pct) {
@@ -316,8 +378,7 @@ void powerRGB(bool on) {
 }
 
 void setColorRGB(uint8_t r, uint8_t g, uint8_t b) {
-  uint8_t cmd[9] = {0x7E, 0xFF, 0x05, 0x03, r, g, b, 0xFF, 0xEF};
-  if (Lamp) Lamp->setColor(r, g, b, cmd);
+  if (Lamp) Lamp->setColor(r, g, b);
 }
 
 void setBrightRGB(uint8_t pct) {
@@ -332,8 +393,7 @@ void powerSKY(bool on) {
 }
 
 void setColorSKY(uint8_t r, uint8_t g, uint8_t b) {
-  uint8_t cmd[9] = {0x7E, 0xFF, 0x05, 0x03, r, g, b, 0xFF, 0xEF};
-  if (Sky) Sky->setColor(r, g, b, cmd);
+  if (Sky) Sky->setColor(r, g, b);
 }
 
 void setBrightSKY(uint8_t pct) {
